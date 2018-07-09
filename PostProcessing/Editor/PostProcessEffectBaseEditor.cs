@@ -1,8 +1,8 @@
 using System;
 using UnityEngine;
-using UnityEngine.Experimental.PostProcessing;
+using UnityEngine.Rendering.PostProcessing;
 
-namespace UnityEditor.Experimental.PostProcessing
+namespace UnityEditor.Rendering.PostProcessing
 {
     public class PostProcessEffectBaseEditor
     {
@@ -29,7 +29,7 @@ namespace UnityEditor.Experimental.PostProcessing
             this.target = target;
             m_Inspector = inspector;
             serializedObject = new SerializedObject(target);
-            m_Enabled = serializedObject.FindProperty("enabled");
+            m_Enabled = serializedObject.FindProperty("enabled.value");
             activeProperty = serializedObject.FindProperty("active");
             OnEnable();
         }
@@ -72,12 +72,10 @@ namespace UnityEditor.Experimental.PostProcessing
 
                 GUILayout.FlexibleSpace();
 
-                var property = m_Enabled.Copy();
-                property.Next(true);
-                bool enabled = property.boolValue;
+                bool enabled = m_Enabled.boolValue;
                 enabled = GUILayout.Toggle(enabled, EditorUtilities.GetContent("On|Enable this effect."), EditorStyles.miniButtonLeft, GUILayout.Width(35f), GUILayout.ExpandWidth(false));
                 enabled = !GUILayout.Toggle(!enabled, EditorUtilities.GetContent("Off|Disable this effect."), EditorStyles.miniButtonRight, GUILayout.Width(35f), GUILayout.ExpandWidth(false));
-                property.boolValue = enabled;
+                m_Enabled.boolValue = enabled;
             }
         }
 
@@ -109,17 +107,34 @@ namespace UnityEditor.Experimental.PostProcessing
                     title.tooltip = tooltipAttr.tooltip;
             }
 
-            // Look for a compatible attribute decorator and break as soon as we find one
+            // Look for a compatible attribute decorator
             AttributeDecorator decorator = null;
             Attribute attribute = null;
 
             foreach (var attr in property.attributes)
             {
-                decorator = EditorUtilities.GetDecorator(attr.GetType());
-                attribute = attr;
+                // Use the first decorator we found
+                if (decorator == null)
+                {
+                    decorator = EditorUtilities.GetDecorator(attr.GetType());
+                    attribute = attr;
+                }
 
-                if (decorator != null)
-                    break;
+                // Draw unity built-in Decorators (Space, Header)
+                if (attr is PropertyAttribute)
+                {
+                    if (attr is SpaceAttribute)
+                    {
+                        EditorGUILayout.GetControlRect(false, (attr as SpaceAttribute).height);
+                    }
+                    else if (attr is HeaderAttribute)
+                    {
+                        var rect = EditorGUILayout.GetControlRect(false, 24f);
+                        rect.y += 8f;
+                        rect = EditorGUI.IndentedRect(rect);
+                        EditorGUI.LabelField(rect, (attr as HeaderAttribute).header, Styling.headerLabel);
+                    }
+                }
             }
 
             bool invalidProp = false;
@@ -150,7 +165,17 @@ namespace UnityEditor.Experimental.PostProcessing
                     }
 
                     // Default unity field
-                    EditorGUILayout.PropertyField(property.value, title);
+                    if (property.value.hasVisibleChildren
+                        && property.value.propertyType != SerializedPropertyType.Vector2
+                        && property.value.propertyType != SerializedPropertyType.Vector3)
+                    {
+                        GUILayout.Space(12f);
+                        EditorGUILayout.PropertyField(property.value, title, true);
+                    }
+                    else
+                    {
+                        EditorGUILayout.PropertyField(property.value, title);
+                    }
                 }
             }
         }

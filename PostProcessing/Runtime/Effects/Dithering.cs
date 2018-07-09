@@ -1,7 +1,7 @@
 using System;
 using UnityEngine.Assertions;
 
-namespace UnityEngine.Experimental.PostProcessing
+namespace UnityEngine.Rendering.PostProcessing
 {
     [Serializable]
     public sealed class Dithering
@@ -10,11 +10,11 @@ namespace UnityEngine.Experimental.PostProcessing
 
         internal void Render(PostProcessRenderContext context)
         {
-            var blueNoise = context.resources.blueNoise;
+            var blueNoise = context.resources.blueNoise64;
             Assert.IsTrue(blueNoise != null && blueNoise.Length > 0);
 
         #if POSTFX_DEBUG_STATIC_DITHERING // Used by QA for automated testing
-            textureIndex = 0;
+            m_NoiseTextureIndex = 0;
             float rndOffsetX = 0f;
             float rndOffsetY = 0f;
         #else
@@ -28,10 +28,10 @@ namespace UnityEngine.Experimental.PostProcessing
             var noiseTex = blueNoise[m_NoiseTextureIndex];
             var uberSheet = context.uberSheet;
 
-            uberSheet.properties.SetTexture(Uniforms._DitheringTex, noiseTex);
-            uberSheet.properties.SetVector(Uniforms._Dithering_Coords, new Vector4(
-                (float)context.width / (float)noiseTex.width,
-                (float)context.height / (float)noiseTex.height,
+            uberSheet.properties.SetTexture(ShaderIDs.DitheringTex, noiseTex);
+            uberSheet.properties.SetVector(ShaderIDs.Dithering_Coords, new Vector4(
+                (float)context.screenWidth / (float)noiseTex.width,
+                (float)context.screenHeight / (float)noiseTex.height,
                 rndOffsetX,
                 rndOffsetY
             ));

@@ -1,4 +1,4 @@
-// Because this framework is supposed to work with the legacy render pipelines AND scriptable render
+﻿// Because this framework is supposed to work with the legacy render pipelines AND scriptable render
 // pipelines we can't use Unity's shader libraries (some scriptable pipelines come with their own
 // shader lib). So here goes a minimal shader lib only used for post-processing to ensure good
 // compatibility with all pipelines.
@@ -9,28 +9,37 @@
 // -----------------------------------------------------------------------------
 // API macros
 
-#if SHADER_API_PSSL
+#if defined(SHADER_API_PSSL)
     #include "API/PSSL.hlsl"
-#elif SHADER_API_XBOXONE
+#elif defined(SHADER_API_XBOXONE)
     #include "API/XboxOne.hlsl"
-#elif SHADER_API_D3D11
+#elif defined(SHADER_API_D3D11)
     #include "API/D3D11.hlsl"
-#elif SHADER_API_D3D12
+#elif defined(SHADER_API_D3D12)
     #include "API/D3D12.hlsl"
-#elif SHADER_API_D3D9 || SHADER_API_D3D11_9X
+#elif defined(SHADER_API_D3D9) || defined(SHADER_API_D3D11_9X)
     #include "API/D3D9.hlsl"
-#elif SHADER_API_VULKAN
+#elif defined(SHADER_API_VULKAN)
     #include "API/Vulkan.hlsl"
-#elif SHADER_API_METAL
+#elif defined(SHADER_API_SWITCH)
+    #include "API/Switch.hlsl"
+#elif defined(SHADER_API_METAL)
     #include "API/Metal.hlsl"
+#elif defined(SHADER_API_PSP2)
+    #include "API/PSP2.hlsl"
 #else
     #include "API/OpenGL.hlsl"
+#endif
+
+#if defined(SHADER_API_PSSL) || defined(SHADER_API_XBOXONE) || defined(SHADER_API_SWITCH) || defined(SHADER_API_PSP2)
+    #define SHADER_API_CONSOLE
 #endif
 
 // -----------------------------------------------------------------------------
 // Constants
 
-#define HALF_MAX        65504.0
+#define HALF_MAX        65504.0 // (2 - 2^-10) * 2^15
+#define HALF_MAX_MINUS1 65472.0 // (2 - 2^-9) * 2^15
 #define EPSILON         1.0e-4
 #define PI              3.14159265359
 #define TWO_PI          6.28318530718
@@ -55,7 +64,7 @@ float rcp(float value)
 }
 #endif
 
-#ifndef mad
+#if defined(SHADER_API_GLES)
 #define mad(a, b, c) (a * b + c)
 #endif
 
@@ -101,6 +110,28 @@ float4 Max3(float4 a, float4 b, float4 c)
 }
 #endif // INTRINSIC_MINMAX3
 
+// https://twitter.com/SebAaltonen/status/878250919879639040
+// madd_sat + madd
+float FastSign(float x)
+{
+    return saturate(x * FLT_MAX + 0.5) * 2.0 - 1.0;
+}
+
+float2 FastSign(float2 x)
+{
+    return saturate(x * FLT_MAX + 0.5) * 2.0 - 1.0;
+}
+
+float3 FastSign(float3 x)
+{
+    return saturate(x * FLT_MAX + 0.5) * 2.0 - 1.0;
+}
+
+float4 FastSign(float4 x)
+{
+    return saturate(x * FLT_MAX + 0.5) * 2.0 - 1.0;
+}
+
 // Using pow often result to a warning like this
 // "pow(f, e) will not work for negative f, use abs(f) or conditionally handle negative values if you expect them"
 // PositivePow remove this warning when you know the value is positive and avoid inf/NAN.
@@ -124,12 +155,41 @@ float4 PositivePow(float4 base, float4 power)
     return pow(max(abs(base), float4(FLT_EPSILON, FLT_EPSILON, FLT_EPSILON, FLT_EPSILON)), power);
 }
 
+// NaN checker
+// /Gic isn't enabled on fxc so we can't rely on isnan() anymore
+bool IsNan(float x)
+{
+    // For some reason the following tests outputs "internal compiler error" randomly on desktop
+    // so we'll use a safer but slightly slower version instead :/
+    //return (x <= 0.0 || 0.0 <= x) ? false : true;
+    return (x < 0.0 || x > 0.0 || x == 0.0) ? false : true;
+}
+
+bool AnyIsNan(float2 x)
+{
+    return IsNan(x.x) || IsNan(x.y);
+}
+
+bool AnyIsNan(float3 x)
+{
+    return IsNan(x.x) || IsNan(x.y) || IsNan(x.z);
+}
+
+bool AnyIsNan(float4 x)
+{
+    return IsNan(x.x) || IsNan(x.y) || IsNan(x.z) || IsNan(x.w);
+}
+
 // -----------------------------------------------------------------------------
 // Std unity data
 
 float4x4 unity_CameraProjection;
+float4x4 unity_MatrixVP;
+float4x4 unity_ObjectToWorld;
+float4x4 unity_WorldToCamera;
 float3 _WorldSpaceCameraPos;
 float4 _ProjectionParams;         // x: 1 (-1 flipped), y: near,     z: far,       w: 1/far
+float4 unity_ColorSpaceLuminance;
 float4 unity_DeltaTime;           // x: dt,             y: 1/dt,     z: smoothDt,  w: 1/smoothDt
 float4 unity_OrthoParams;         // x: width,          y: height,   z: unused,    w: ortho ? 1 : 0
 float4 _ZBufferParams;            // x: 1-far/near,     y: far/near, z: x/far,     w: y/far
@@ -167,6 +227,27 @@ half4 SafeHDR(half4 c)
     return min(c, HALF_MAX);
 }
 
+// Decode normals stored in _CameraDepthNormalsTexture
+float3 DecodeViewNormalStereo(float4 enc4)
+{
+    float kScale = 1.7777;
+    float3 nn = enc4.xyz * float3(2.0 * kScale, 2.0 * kScale, 0) + float3(-kScale, -kScale, 1);
+    float g = 2.0 / dot(nn.xyz, nn.xyz);
+    float3 n;
+    n.xy = g * nn.xy;
+    n.z = g - 1.0;
+    return n;
+}
+
+// Interleaved gradient function from Jimenez 2014
+// http://www.iryoku.com/next-generation-post-processing-in-call-of-duty-advanced-warfare
+float GradientNoise(float2 uv)
+{
+    uv = floor(uv * _ScreenParams.xy);
+    float f = dot(float2(0.06711056, 0.00583715), uv);
+    return frac(52.9829189 * frac(f));
+}
+
 // Vertex manipulation
 float2 TransformTriangleVertexToUV(float2 vertex)
 {
@@ -188,6 +269,7 @@ struct VaryingsDefault
 {
     float4 vertex : SV_POSITION;
     float2 texcoord : TEXCOORD0;
+    float2 texcoordStereo : TEXCOORD1;
 };
 
 VaryingsDefault VertDefault(AttributesDefault v)
@@ -200,15 +282,22 @@ VaryingsDefault VertDefault(AttributesDefault v)
     o.texcoord = o.texcoord * float2(1.0, -1.0) + float2(0.0, 1.0);
 #endif
 
+    o.texcoordStereo = TransformStereoScreenSpaceTex(o.texcoord, 1.0);
+
     return o;
 }
 
-VaryingsDefault VertDefaultNoFlip(AttributesDefault v)
+float4 _UVTransform; // xy: scale, wz: translate
+
+VaryingsDefault VertUVTransform(AttributesDefault v)
 {
     VaryingsDefault o;
     o.vertex = float4(v.vertex.xy, 0.0, 1.0);
-    o.texcoord = TransformTriangleVertexToUV(v.vertex.xy);
+    o.texcoord = TransformTriangleVertexToUV(v.vertex.xy) * _UVTransform.xy + _UVTransform.zw;
+    o.texcoordStereo = TransformStereoScreenSpaceTex(o.texcoord, 1.0);
     return o;
 }
+
+#define TRANSFORM_TEX(tex,name) (tex.xy * name##_ST.xy + name##_ST.zw)
 
 #endif // UNITY_POSTFX_STDLIB

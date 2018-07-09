@@ -2,32 +2,36 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using UnityEngine;
-using UnityEngine.Experimental.PostProcessing;
+using UnityEngine.Rendering.PostProcessing;
 using UnityEditorInternal;
 using System.IO;
 
-namespace UnityEditor.Experimental.PostProcessing
+namespace UnityEditor.Rendering.PostProcessing
 {
     using SerializedBundleRef = PostProcessLayer.SerializedBundleRef;
     using EXRFlags = Texture2D.EXRFlags;
 
-    // TODO: Bug on domain reload when the inspector is opened with a post-process layer disabled
-    [CustomEditor(typeof(PostProcessLayer))]
+    [CanEditMultipleObjects, CustomEditor(typeof(PostProcessLayer))]
     public sealed class PostProcessLayerEditor : BaseEditor<PostProcessLayer>
     {
+        SerializedProperty m_StopNaNPropagation;
         SerializedProperty m_VolumeTrigger;
         SerializedProperty m_VolumeLayer;
 
         SerializedProperty m_AntialiasingMode;
         SerializedProperty m_TaaJitterSpread;
-        SerializedProperty m_TaaSharpen;
+        SerializedProperty m_TaaSharpness;
         SerializedProperty m_TaaStationaryBlending;
         SerializedProperty m_TaaMotionBlending;
-        SerializedProperty m_FxaaMobileOptimized;
+        SerializedProperty m_SmaaQuality;
+        SerializedProperty m_FxaaFastMode;
+        SerializedProperty m_FxaaKeepAlpha;
 
-        SerializedProperty m_DebugDisplay;
-        SerializedProperty m_DebugMonitor;
-        SerializedProperty m_DebugLightMeter;
+        SerializedProperty m_FogEnabled;
+        SerializedProperty m_FogExcludeSkybox;
+
+        SerializedProperty m_ShowToolkit;
+        SerializedProperty m_ShowCustomSorter;
 
         Dictionary<PostProcessEvent, ReorderableList> m_CustomLists;
 
@@ -49,52 +53,24 @@ namespace UnityEditor.Experimental.PostProcessing
 
         void OnEnable()
         {
+            m_StopNaNPropagation = FindProperty(x => x.stopNaNPropagation);
             m_VolumeTrigger = FindProperty(x => x.volumeTrigger);
             m_VolumeLayer = FindProperty(x => x.volumeLayer);
 
             m_AntialiasingMode = FindProperty(x => x.antialiasingMode);
             m_TaaJitterSpread = FindProperty(x => x.temporalAntialiasing.jitterSpread);
-            m_TaaSharpen = FindProperty(x => x.temporalAntialiasing.sharpen);
+            m_TaaSharpness = FindProperty(x => x.temporalAntialiasing.sharpness);
             m_TaaStationaryBlending = FindProperty(x => x.temporalAntialiasing.stationaryBlending);
             m_TaaMotionBlending = FindProperty(x => x.temporalAntialiasing.motionBlending);
-            m_FxaaMobileOptimized = FindProperty(x => x.fastApproximateAntialiasing.mobileOptimized);
+            m_SmaaQuality = FindProperty(x => x.subpixelMorphologicalAntialiasing.quality);
+            m_FxaaFastMode = FindProperty(x => x.fastApproximateAntialiasing.fastMode);
+            m_FxaaKeepAlpha = FindProperty(x => x.fastApproximateAntialiasing.keepAlpha);
 
-            m_DebugDisplay = FindProperty(x => x.debugView.display);
-            m_DebugMonitor = FindProperty(x => x.debugView.monitor);
-            m_DebugLightMeter = FindProperty(x => x.debugView.lightMeter);
+            m_FogEnabled = FindProperty(x => x.fog.enabled);
+            m_FogExcludeSkybox = FindProperty(x => x.fog.excludeSkybox);
 
-            // See the comment on haveBundlesBeenInited in PostProcessLayer for more info as to why
-            // we need to do this
-            if (!m_Target.haveBundlesBeenInited)
-                m_Target.InitBundles();
-
-            // Create a reorderable list for each injection event
-            m_CustomLists = new Dictionary<PostProcessEvent, ReorderableList>();
-            foreach (var evt in Enum.GetValues(typeof(PostProcessEvent)).Cast<PostProcessEvent>())
-            {
-                var bundles = m_Target.sortedBundles[evt];
-                var listName = ObjectNames.NicifyVariableName(evt.ToString());
-                    
-                var list = new ReorderableList(bundles, typeof(SerializedBundleRef), true, true, false, false);
-
-                list.drawHeaderCallback = (rect) =>
-                {
-                    EditorGUI.LabelField(rect, listName);
-                };
-
-                list.drawElementCallback = (rect, index, isActive, isFocused) =>
-                {
-                    var sbr = (SerializedBundleRef)list.list[index];
-                    EditorGUI.LabelField(rect, sbr.bundle.attribute.menuItem);
-                };
-
-                list.onReorderCallback = (l) =>
-                {
-                    EditorUtility.SetDirty(m_Target);
-                };
-
-                m_CustomLists.Add(evt, list);
-            }
+            m_ShowToolkit = serializedObject.FindProperty("m_ShowToolkit");
+            m_ShowCustomSorter = serializedObject.FindProperty("m_ShowCustomSorter");
         }
 
         void OnDisable()
@@ -106,6 +82,31 @@ namespace UnityEditor.Experimental.PostProcessing
         {
             serializedObject.Update();
 
+            var camera = m_Target.GetComponent<Camera>();
+
+            #if !UNITY_2017_2_OR_NEWER
+            if (RuntimeUtilities.isSinglePassStereoSelected)
+                EditorGUILayout.HelpBox("Unity 2017.2+ required for full Single-pass stereo rendering support.", MessageType.Warning);
+            #endif
+
+            DoVolumeBlending();
+            DoAntialiasing();
+            DoFog(camera);
+
+            EditorGUILayout.PropertyField(m_StopNaNPropagation, EditorUtilities.GetContent("Stop NaN Propagation|Automatically replaces NaN/Inf in shaders by a black pixel to avoid breaking some effects. This will slightly affect performances and should only be used if you experience NaN issues that you can't fix. Has no effect on GLES2 platforms."));
+            EditorGUILayout.Space();
+
+            DoToolkit();
+            DoCustomEffectSorter();
+
+            EditorUtilities.DrawSplitter();
+            EditorGUILayout.Space();
+
+            serializedObject.ApplyModifiedProperties();
+        }
+
+        void DoVolumeBlending()
+        {
             EditorGUILayout.LabelField(EditorUtilities.GetContent("Volume blending"), EditorStyles.boldLabel);
             EditorGUI.indentLevel++;
             {
@@ -118,7 +119,7 @@ namespace UnityEditor.Experimental.PostProcessing
                 var buttonRect = new Rect(fieldRect.xMax, lineRect.y, 60f, lineRect.height);
 
                 EditorGUI.PrefixLabel(labelRect, EditorUtilities.GetContent("Trigger|A transform that will act as a trigger for volume blending."));
-                m_VolumeTrigger.objectReferenceValue = (Transform)EditorGUI.ObjectField(fieldRect, m_VolumeTrigger.objectReferenceValue, typeof(Transform), false);
+                m_VolumeTrigger.objectReferenceValue = (Transform)EditorGUI.ObjectField(fieldRect, m_VolumeTrigger.objectReferenceValue, typeof(Transform), true);
                 if (GUI.Button(buttonRect, EditorUtilities.GetContent("This|Assigns the current GameObject as a trigger."), EditorStyles.miniButton))
                     m_VolumeTrigger.objectReferenceValue = m_Target.transform;
 
@@ -136,7 +137,10 @@ namespace UnityEditor.Experimental.PostProcessing
             EditorGUI.indentLevel--;
 
             EditorGUILayout.Space();
+        }
 
+        void DoAntialiasing()
+        {
             EditorGUILayout.LabelField(EditorUtilities.GetContent("Anti-aliasing"), EditorStyles.boldLabel);
             EditorGUI.indentLevel++;
             {
@@ -144,53 +148,69 @@ namespace UnityEditor.Experimental.PostProcessing
 
                 if (m_AntialiasingMode.intValue == (int)PostProcessLayer.Antialiasing.TemporalAntialiasing)
                 {
-                    if (RuntimeUtilities.isSinglePassStereoEnabled)
-                        EditorGUILayout.HelpBox("TAA doesn't work with Single-pass stereo rendering.", MessageType.Warning);
+                    #if !UNITY_2017_3_OR_NEWER
+                    if (RuntimeUtilities.isSinglePassStereoSelected)
+                        EditorGUILayout.HelpBox("TAA requires Unity 2017.3+ for Single-pass stereo rendering support.", MessageType.Warning);
+                    #endif
 
                     EditorGUILayout.PropertyField(m_TaaJitterSpread);
                     EditorGUILayout.PropertyField(m_TaaStationaryBlending);
                     EditorGUILayout.PropertyField(m_TaaMotionBlending);
-                    EditorGUILayout.PropertyField(m_TaaSharpen);
+                    EditorGUILayout.PropertyField(m_TaaSharpness);
                 }
                 else if (m_AntialiasingMode.intValue == (int)PostProcessLayer.Antialiasing.SubpixelMorphologicalAntialiasing)
                 {
-                    if (RuntimeUtilities.isSinglePassStereoEnabled)
+                    if (RuntimeUtilities.isSinglePassStereoSelected)
                         EditorGUILayout.HelpBox("SMAA doesn't work with Single-pass stereo rendering.", MessageType.Warning);
+
+                    EditorGUILayout.PropertyField(m_SmaaQuality);
+
+                    if (m_SmaaQuality.intValue != (int)SubpixelMorphologicalAntialiasing.Quality.Low && EditorUtilities.isTargetingConsolesOrMobiles)
+                        EditorGUILayout.HelpBox("For performance reasons it is recommended to use Low Quality on mobile and console platforms.", MessageType.Warning);
                 }
                 else if (m_AntialiasingMode.intValue == (int)PostProcessLayer.Antialiasing.FastApproximateAntialiasing)
                 {
-                    EditorGUILayout.PropertyField(m_FxaaMobileOptimized);
+                    EditorGUILayout.PropertyField(m_FxaaFastMode);
+                    EditorGUILayout.PropertyField(m_FxaaKeepAlpha);
+
+                    if (!m_FxaaFastMode.boolValue && EditorUtilities.isTargetingConsolesOrMobiles)
+                        EditorGUILayout.HelpBox("For performance reasons it is recommended to use Fast Mode on mobile and console platforms.", MessageType.Warning);
                 }
             }
             EditorGUI.indentLevel--;
 
             EditorGUILayout.Space();
+        }
 
-            EditorGUILayout.LabelField(EditorUtilities.GetContent("Debug Layer"), EditorStyles.boldLabel);
+        void DoFog(Camera camera)
+        {
+            if (camera == null || camera.actualRenderingPath != RenderingPath.DeferredShading)
+                return;
+
+            EditorGUILayout.LabelField(EditorUtilities.GetContent("Deferred Fog"), EditorStyles.boldLabel);
             EditorGUI.indentLevel++;
             {
-                EditorGUILayout.PropertyField(m_DebugDisplay, EditorUtilities.GetContent("Display|Toggle visibility of the debug layer on & off in the Game View."));
+                EditorGUILayout.PropertyField(m_FogEnabled);
 
-                if (m_DebugDisplay.boolValue)
+                if (m_FogEnabled.boolValue)
                 {
-                    if (!SystemInfo.supportsComputeShaders)
-                        EditorGUILayout.HelpBox("The debug layer only works on compute-shader enabled platforms.", MessageType.Info);
-
-                    EditorGUILayout.PropertyField(m_DebugMonitor, EditorUtilities.GetContent("Monitor|The real-time monitor to display on the debug layer."));
-                    EditorGUILayout.PropertyField(m_DebugLightMeter, EditorUtilities.GetContent("HDR Light Meter|Light metering utility used to setup auto exposure. Note that it will only display correct values when using a full-HDR workflow (HDR camera, HDR/Custom color grading)."));
+                    EditorGUILayout.PropertyField(m_FogExcludeSkybox);
+                    EditorGUILayout.HelpBox("This adds fog compatibility to the deferred rendering path; actual fog settings should be set in the Lighting panel.", MessageType.Info);
                 }
             }
             EditorGUI.indentLevel--;
 
             EditorGUILayout.Space();
+        }
 
-            // Toolkit
+        void DoToolkit()
+        {
             EditorUtilities.DrawSplitter();
-            GlobalSettings.showLayerToolkit = EditorUtilities.DrawHeader("Toolkit", GlobalSettings.showLayerToolkit);
+            m_ShowToolkit.boolValue = EditorUtilities.DrawHeader("Toolkit", m_ShowToolkit.boolValue);
 
-            if (GlobalSettings.showLayerToolkit)
+            if (m_ShowToolkit.boolValue)
             {
-                EditorGUILayout.Space();
+                GUILayout.Space(2);
 
                 if (GUILayout.Button(EditorUtilities.GetContent("Export frame to EXR..."), EditorStyles.miniButton))
                 {
@@ -228,16 +248,76 @@ namespace UnityEditor.Experimental.PostProcessing
                     }
                 }
 
-                EditorGUILayout.Space();
+                GUILayout.Space(3);
             }
+        }
 
-            // Custom user effects sorter
+        void DoCustomEffectSorter()
+        {
             EditorUtilities.DrawSplitter();
-            GlobalSettings.showCustomSorter = EditorUtilities.DrawHeader("Custom Effect Sorting", GlobalSettings.showCustomSorter);
+            m_ShowCustomSorter.boolValue = EditorUtilities.DrawHeader("Custom Effect Sorting", m_ShowCustomSorter.boolValue);
 
-            if (GlobalSettings.showCustomSorter)
+            if (m_ShowCustomSorter.boolValue)
             {
-                EditorGUILayout.Space();
+                bool isInPrefab = false;
+
+                // Init lists if needed
+                if (m_CustomLists == null)
+                {
+                    // In some cases the editor will refresh before components which means
+                    // components might not have been fully initialized yet. In this case we also
+                    // need to make sure that we're not in a prefab as sorteBundles isn't a
+                    // serializable object and won't exist until put on a scene.
+                    if (m_Target.sortedBundles == null)
+                    {
+                        isInPrefab = string.IsNullOrEmpty(m_Target.gameObject.scene.name);
+
+                        if (!isInPrefab)
+                        {
+                            // sortedBundles will be initialized and ready to use on the next frame
+                            Repaint();
+                        }
+                    }
+                    else
+                    {
+                        // Create a reorderable list for each injection event
+                        m_CustomLists = new Dictionary<PostProcessEvent, ReorderableList>();
+                        foreach (var evt in Enum.GetValues(typeof(PostProcessEvent)).Cast<PostProcessEvent>())
+                        {
+                            var bundles = m_Target.sortedBundles[evt];
+                            var listName = ObjectNames.NicifyVariableName(evt.ToString());
+
+                            var list = new ReorderableList(bundles, typeof(SerializedBundleRef), true, true, false, false);
+
+                            list.drawHeaderCallback = (rect) =>
+                            {
+                                EditorGUI.LabelField(rect, listName);
+                            };
+
+                            list.drawElementCallback = (rect, index, isActive, isFocused) =>
+                            {
+                                var sbr = (SerializedBundleRef)list.list[index];
+                                EditorGUI.LabelField(rect, sbr.bundle.attribute.menuItem);
+                            };
+
+                            list.onReorderCallback = (l) =>
+                            {
+                                EditorUtility.SetDirty(m_Target);
+                            };
+
+                            m_CustomLists.Add(evt, list);
+                        }
+                    }
+                }
+
+                GUILayout.Space(5);
+
+                if (isInPrefab)
+                {
+                    EditorGUILayout.HelpBox("Not supported in prefabs.", MessageType.Info);
+                    GUILayout.Space(3);
+                    return;
+                }
 
                 bool anyList = false;
                 if (m_CustomLists != null)
@@ -258,14 +338,9 @@ namespace UnityEditor.Experimental.PostProcessing
                 if (!anyList)
                 {
                     EditorGUILayout.HelpBox("No custom effect loaded.", MessageType.Info);
-                    EditorGUILayout.Space();
+                    GUILayout.Space(3);
                 }
             }
-
-            EditorUtilities.DrawSplitter();
-            EditorGUILayout.Space();
-
-            serializedObject.ApplyModifiedProperties();
         }
 
         void ExportFrameToExr(ExportMode mode)
@@ -282,7 +357,7 @@ namespace UnityEditor.Experimental.PostProcessing
             var h = camera.pixelHeight;
 
             var texOut = new Texture2D(w, h, TextureFormat.RGBAFloat, false, true);
-            var target = RenderTexture.GetTemporary(w, h, 24, RenderTextureFormat.ARGBFloat, RenderTextureReadWrite.Linear, 1);
+            var target = RenderTexture.GetTemporary(w, h, 24, RenderTextureFormat.ARGBFloat, RenderTextureReadWrite.Linear);
 
             var lastActive = RenderTexture.active;
             var lastTargetSet = camera.targetTexture;

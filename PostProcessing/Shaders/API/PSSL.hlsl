@@ -1,6 +1,7 @@
 #define UNITY_UV_STARTS_AT_TOP 1
 #define UNITY_REVERSED_Z 1
 #define UNITY_GATHER_SUPPORTED (SHADER_TARGET >= 50)
+#define UNITY_CAN_READ_POSITION_IN_FRAGMENT_PROGRAM 1
 #define INTRINSIC_MINMAX3
 #define Min3 min3
 #define Max3 max3
@@ -25,6 +26,9 @@
 
 #define SAMPLE_TEXTURE3D(textureName, samplerName, coord3) textureName.Sample(samplerName, coord3)
 
+#define LOAD_TEXTURE2D(textureName, texelSize, icoord2) textureName.Load(int3(icoord2, 0))
+#define LOAD_TEXTURE2D_LOD(textureName, texelSize, icoord2) textureName.Load(int3(icoord2, lod))
+
 #define GATHER_TEXTURE2D(textureName, samplerName, coord2) textureName.Gather(samplerName, coord2)
 #define GATHER_RED_TEXTURE2D(textureName, samplerName, coord2) textureName.GatherRed(samplerName, coord2)
 #define GATHER_GREEN_TEXTURE2D(textureName, samplerName, coord2) textureName.GatherGreen(samplerName, coord2)
@@ -42,5 +46,10 @@
 #define CBUFFER_START(name) ConstantBuffer name {
 #define CBUFFER_END };
 
-#define FXAA_HLSL_5 1
-#define SMAA_HLSL_4_1 1
+#if UNITY_GATHER_SUPPORTED
+    #define FXAA_HLSL_5 1
+    #define SMAA_HLSL_4_1 1
+#else
+    #define FXAA_HLSL_4 1
+    #define SMAA_HLSL_4 1
+#endif

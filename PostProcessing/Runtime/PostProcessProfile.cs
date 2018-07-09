@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 
-namespace UnityEngine.Experimental.PostProcessing
+namespace UnityEngine.Rendering.PostProcessing
 {
     public sealed class PostProcessProfile : ScriptableObject
     {
@@ -11,6 +11,16 @@ namespace UnityEngine.Experimental.PostProcessing
         // Editor only, doesn't have any use outside of it
         [NonSerialized]
         public bool isDirty = true;
+
+        void OnEnable()
+        {
+            // Make sure every setting is valid. If a profile holds a script that doesn't exist
+            // anymore, nuke it to keep the profile clean. Note that if you delete a script that is
+            // currently in use in a profile you'll still get a one-time error in the console, it's
+            // harmless and happens because Unity does a redraw of the editor (and thus the current
+            // frame) before the recompilation step.
+            settings.RemoveAll(x => x == null);
+        }
 
         public void Reset()
         {
@@ -31,7 +41,6 @@ namespace UnityEngine.Experimental.PostProcessing
             var effect = (PostProcessEffectSettings)CreateInstance(type);
             effect.hideFlags = HideFlags.HideInInspector | HideFlags.HideInHierarchy;
             effect.name = type.Name;
-            effect.enabled.overrideState = true;
             effect.enabled.value = true;
             settings.Add(effect);
             isDirty = true;
@@ -60,7 +69,7 @@ namespace UnityEngine.Experimental.PostProcessing
 
             for (int i = 0; i < settings.Count; i++)
             {
-                if (settings.GetType() == type)
+                if (settings[i].GetType() == type)
                 {
                     toRemove = i;
                     break;
@@ -91,7 +100,17 @@ namespace UnityEngine.Experimental.PostProcessing
             return false;
         }
 
-        public bool HasSettings<T>(out T outSetting)
+        public T GetSetting<T>() where T : PostProcessEffectSettings
+        {
+            foreach (var setting in settings)
+            {
+                if (setting is T)
+                    return setting as T;
+            }
+            return null;
+        }
+
+        public bool TryGetSettings<T>(out T outSetting)
             where T : PostProcessEffectSettings
         {
             var type = typeof(T);

@@ -1,4 +1,4 @@
-namespace UnityEngine.Experimental.PostProcessing
+namespace UnityEngine.Rendering.PostProcessing
 {
     public abstract class PostProcessEffectRenderer
     {
@@ -10,7 +10,7 @@ namespace UnityEngine.Experimental.PostProcessing
         }
 
         // Unused with scriptable render pipelines
-        public virtual DepthTextureMode GetLegacyCameraFlags()
+        public virtual DepthTextureMode GetCameraFlags()
         {
             return DepthTextureMode.None;
         }

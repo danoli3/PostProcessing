@@ -1,6 +1,7 @@
 using System;
+using UnityEngine.Serialization;
 
-namespace UnityEngine.Experimental.PostProcessing
+namespace UnityEngine.Rendering.PostProcessing
 {
     [Serializable]
     [PostProcess(typeof(ChromaticAberrationRenderer), "Unity/Chromatic Aberration")]
@@ -10,20 +11,16 @@ namespace UnityEngine.Experimental.PostProcessing
         public TextureParameter spectralLut = new TextureParameter { value = null };
 
         [Range(0f, 1f), Tooltip("Amount of tangential distortion.")]
-        public FloatParameter intensity = new FloatParameter { value = 0.1f };
+        public FloatParameter intensity = new FloatParameter { value = 0f };
 
-        [Tooltip("Boost performances by lowering the effect quality. This settings is meant to be used on mobile and other low-end platforms.")]
-        public BoolParameter mobileOptimized = new BoolParameter { value = false };
+        [FormerlySerializedAs("mobileOptimized")]
+        [Tooltip("Boost performances by lowering the effect quality. This settings is meant to be used on mobile and other low-end platforms but can also provide a nice performance boost on desktops and consoles.")]
+        public BoolParameter fastMode = new BoolParameter { value = false };
 
-        public override bool IsEnabledAndSupported()
+        public override bool IsEnabledAndSupported(PostProcessRenderContext context)
         {
             return enabled.value
                 && intensity.value > 0f;
-        }
-
-        public override void SetDisabledState()
-        {
-            intensity.value = 0f;
         }
     }
 
@@ -62,12 +59,12 @@ namespace UnityEngine.Experimental.PostProcessing
             }
             
             var sheet = context.uberSheet;
-            sheet.EnableKeyword(settings.mobileOptimized
+            sheet.EnableKeyword(settings.fastMode
                 ? "CHROMATIC_ABERRATION_LOW"
                 : "CHROMATIC_ABERRATION"
             );
-            sheet.properties.SetFloat(Uniforms._ChromaticAberration_Amount, settings.intensity * 0.05f);
-            sheet.properties.SetTexture(Uniforms._ChromaticAberration_SpectralLut, spectralLut);
+            sheet.properties.SetFloat(ShaderIDs.ChromaticAberration_Amount, settings.intensity * 0.05f);
+            sheet.properties.SetTexture(ShaderIDs.ChromaticAberration_SpectralLut, spectralLut);
         }
 
         public override void Release()

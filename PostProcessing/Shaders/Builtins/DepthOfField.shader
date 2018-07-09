@@ -1,12 +1,7 @@
 Shader "Hidden/PostProcessing/DepthOfField"
 {
-    HLSLINCLUDE
-
-        #pragma exclude_renderers d3d11_9x
-
-    ENDHLSL
-
     // SubShader with SM 5.0 support
+    // DX11+, OpenGL 4.3+, OpenGL ES 3.1+AEP, Vulkan, consoles
     // Gather intrinsics are used to reduce texture sample count.
     SubShader
     {
@@ -17,7 +12,7 @@ Shader "Hidden/PostProcessing/DepthOfField"
             Name "CoC Calculation"
 
             HLSLPROGRAM
-                #pragma target 3.0
+                #pragma target 3.5
                 #pragma vertex VertDefault
                 #pragma fragment FragCoC
                 #include "DepthOfField.hlsl"
@@ -44,7 +39,6 @@ Shader "Hidden/PostProcessing/DepthOfField"
                 #pragma target 5.0
                 #pragma vertex VertDefault
                 #pragma fragment FragPrefilter
-                #pragma multi_compile __ UNITY_COLORSPACE_GAMMA
                 #include "DepthOfField.hlsl"
             ENDHLSL
         }
@@ -54,7 +48,7 @@ Shader "Hidden/PostProcessing/DepthOfField"
             Name "Bokeh Filter (small)"
 
             HLSLPROGRAM
-                #pragma target 3.0
+                #pragma target 3.5
                 #pragma vertex VertDefault
                 #pragma fragment FragBlur
                 #define KERNEL_SMALL
@@ -67,7 +61,7 @@ Shader "Hidden/PostProcessing/DepthOfField"
             Name "Bokeh Filter (medium)"
 
             HLSLPROGRAM
-                #pragma target 3.0
+                #pragma target 3.5
                 #pragma vertex VertDefault
                 #pragma fragment FragBlur
                 #define KERNEL_MEDIUM
@@ -80,7 +74,7 @@ Shader "Hidden/PostProcessing/DepthOfField"
             Name "Bokeh Filter (large)"
 
             HLSLPROGRAM
-                #pragma target 3.0
+                #pragma target 3.5
                 #pragma vertex VertDefault
                 #pragma fragment FragBlur
                 #define KERNEL_LARGE
@@ -93,7 +87,7 @@ Shader "Hidden/PostProcessing/DepthOfField"
             Name "Bokeh Filter (very large)"
 
             HLSLPROGRAM
-                #pragma target 3.0
+                #pragma target 3.5
                 #pragma vertex VertDefault
                 #pragma fragment FragBlur
                 #define KERNEL_VERYLARGE
@@ -106,7 +100,7 @@ Shader "Hidden/PostProcessing/DepthOfField"
             Name "Postfilter"
 
             HLSLPROGRAM
-                #pragma target 3.0
+                #pragma target 3.5
                 #pragma vertex VertDefault
                 #pragma fragment FragPostBlur
                 #include "DepthOfField.hlsl"
@@ -118,15 +112,28 @@ Shader "Hidden/PostProcessing/DepthOfField"
             Name "Combine"
 
             HLSLPROGRAM
-                #pragma target 3.0
+                #pragma target 3.5
                 #pragma vertex VertDefault
                 #pragma fragment FragCombine
                 #include "DepthOfField.hlsl"
             ENDHLSL
         }
+
+        Pass // 9
+        {
+            Name "Debug Overlay"
+
+            HLSLPROGRAM
+                #pragma target 3.5
+                #pragma vertex VertDefault
+                #pragma fragment FragDebugOverlay
+                #include "DepthOfField.hlsl"
+            ENDHLSL
+        }
     }
 
-    // Fallback SubShader with SM 3.0
+    // Fallback SubShader with SM 3.5
+    // DX11+, OpenGL 3.2+, OpenGL ES 3+, Metal, Vulkan, consoles
     SubShader
     {
         Cull Off ZWrite Off ZTest Always
@@ -136,7 +143,7 @@ Shader "Hidden/PostProcessing/DepthOfField"
             Name "CoC Calculation"
 
             HLSLPROGRAM
-                #pragma target 3.0
+                #pragma target 3.5
                 #pragma vertex VertDefault
                 #pragma fragment FragCoC
                 #include "DepthOfField.hlsl"
@@ -148,7 +155,7 @@ Shader "Hidden/PostProcessing/DepthOfField"
             Name "CoC Temporal Filter"
 
             HLSLPROGRAM
-                #pragma target 3.0
+                #pragma target 3.5
                 #pragma vertex VertDefault
                 #pragma fragment FragTempFilter
                 #include "DepthOfField.hlsl"
@@ -160,10 +167,9 @@ Shader "Hidden/PostProcessing/DepthOfField"
             Name "Downsample and Prefilter"
 
             HLSLPROGRAM
-                #pragma target 3.0
+                #pragma target 3.5
                 #pragma vertex VertDefault
                 #pragma fragment FragPrefilter
-                #pragma multi_compile __ UNITY_COLORSPACE_GAMMA
                 #include "DepthOfField.hlsl"
             ENDHLSL
         }
@@ -173,7 +179,7 @@ Shader "Hidden/PostProcessing/DepthOfField"
             Name "Bokeh Filter (small)"
 
             HLSLPROGRAM
-                #pragma target 3.0
+                #pragma target 3.5
                 #pragma vertex VertDefault
                 #pragma fragment FragBlur
                 #define KERNEL_SMALL
@@ -186,7 +192,7 @@ Shader "Hidden/PostProcessing/DepthOfField"
             Name "Bokeh Filter (medium)"
 
             HLSLPROGRAM
-                #pragma target 3.0
+                #pragma target 3.5
                 #pragma vertex VertDefault
                 #pragma fragment FragBlur
                 #define KERNEL_MEDIUM
@@ -199,7 +205,7 @@ Shader "Hidden/PostProcessing/DepthOfField"
             Name "Bokeh Filter (large)"
 
             HLSLPROGRAM
-                #pragma target 3.0
+                #pragma target 3.5
                 #pragma vertex VertDefault
                 #pragma fragment FragBlur
                 #define KERNEL_LARGE
@@ -212,7 +218,7 @@ Shader "Hidden/PostProcessing/DepthOfField"
             Name "Bokeh Filter (very large)"
 
             HLSLPROGRAM
-                #pragma target 3.0
+                #pragma target 3.5
                 #pragma vertex VertDefault
                 #pragma fragment FragBlur
                 #define KERNEL_VERYLARGE
@@ -225,7 +231,7 @@ Shader "Hidden/PostProcessing/DepthOfField"
             Name "Postfilter"
 
             HLSLPROGRAM
-                #pragma target 3.0
+                #pragma target 3.5
                 #pragma vertex VertDefault
                 #pragma fragment FragPostBlur
                 #include "DepthOfField.hlsl"
@@ -237,9 +243,21 @@ Shader "Hidden/PostProcessing/DepthOfField"
             Name "Combine"
 
             HLSLPROGRAM
-                #pragma target 3.0
+                #pragma target 3.5
                 #pragma vertex VertDefault
                 #pragma fragment FragCombine
+                #include "DepthOfField.hlsl"
+            ENDHLSL
+        }
+
+        Pass // 9
+        {
+            Name "Debug Overlay"
+
+            HLSLPROGRAM
+                #pragma target 3.5
+                #pragma vertex VertDefault
+                #pragma fragment FragDebugOverlay
                 #include "DepthOfField.hlsl"
             ENDHLSL
         }

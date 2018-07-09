@@ -1,57 +1,46 @@
-namespace UnityEngine.Experimental.PostProcessing
+namespace UnityEngine.Rendering.PostProcessing
 {   
     public sealed class LogHistogram
     {
-        public static readonly int rangeMin = -9; // ev
-        public static readonly int rangeMax =  9; // ev
+        public const int rangeMin = -9; // ev
+        public const int rangeMax =  9; // ev
         
         // Don't forget to update 'ExposureHistogram.hlsl' if you change these values !
         const int k_Bins = 128;
-        const int k_ThreadX = 16;
-        const int k_ThreadY = 16;
+        int m_ThreadX;
+        int m_ThreadY;
 
         public ComputeBuffer data { get; private set; }
 
         public void Generate(PostProcessRenderContext context)
         {
             if (data == null)
+            {
+                m_ThreadX = 16;
+                m_ThreadY = RuntimeUtilities.isAndroidOpenGL ? 8 : 16;
                 data = new ComputeBuffer(k_Bins, sizeof(uint));
-
+            }
+            
+            var scaleOffsetRes = GetHistogramScaleOffsetRes(context);
             var compute = context.resources.computeShaders.exposureHistogram;
             var cmd = context.command;
             cmd.BeginSample("LogHistogram");
 
-            // Downscale the framebuffer, we don't need an absolute precision to compute the average
-            // luminance (and it'll make it a tiny bit more stable - bonus side-effect)
-            var scaleOffsetRes = GetHistogramScaleOffsetRes(context);
-
-            cmd.GetTemporaryRT(Uniforms._AutoExposureCopyTex,
-                (int)scaleOffsetRes.z,
-                (int)scaleOffsetRes.w,
-                0,
-                FilterMode.Bilinear,
-                context.sourceFormat
-            );
-            cmd.BlitFullscreenTriangle(context.source, Uniforms._AutoExposureCopyTex);
-
             // Clear the buffer on every frame as we use it to accumulate luminance values on each frame
             int kernel = compute.FindKernel("KEyeHistogramClear");
             cmd.SetComputeBufferParam(compute, kernel, "_HistogramBuffer", data);
-            cmd.DispatchCompute(compute, kernel, Mathf.CeilToInt(k_Bins / (float)k_ThreadX), 1, 1);
+            cmd.DispatchCompute(compute, kernel, Mathf.CeilToInt(k_Bins / (float)m_ThreadX), 1, 1);
 
             // Get a log histogram
             kernel = compute.FindKernel("KEyeHistogram");
             cmd.SetComputeBufferParam(compute, kernel, "_HistogramBuffer", data);
-            cmd.SetComputeTextureParam(compute, kernel, "_Source", Uniforms._AutoExposureCopyTex);
+            cmd.SetComputeTextureParam(compute, kernel, "_Source", context.source);
             cmd.SetComputeVectorParam(compute, "_ScaleOffsetRes", scaleOffsetRes);
             cmd.DispatchCompute(compute, kernel,
-                Mathf.CeilToInt(scaleOffsetRes.z / (float)k_ThreadX),
-                Mathf.CeilToInt(scaleOffsetRes.w / (float)k_ThreadY),
+                Mathf.CeilToInt(scaleOffsetRes.z / 2f / m_ThreadX),
+                Mathf.CeilToInt(scaleOffsetRes.w / 2f / m_ThreadY),
                 1
             );
-
-            // Cleanup
-            cmd.ReleaseTemporaryRT(Uniforms._AutoExposureCopyTex);
 
             cmd.EndSample("LogHistogram");
         }
@@ -61,7 +50,7 @@ namespace UnityEngine.Experimental.PostProcessing
             float diff = rangeMax - rangeMin;
             float scale = 1f / diff;
             float offset = -rangeMin * scale;
-            return new Vector4(scale, offset, Mathf.Floor(context.width / 2f), Mathf.Floor(context.height / 2f));
+            return new Vector4(scale, offset, context.width, context.height);
         }
 
         public void Release()

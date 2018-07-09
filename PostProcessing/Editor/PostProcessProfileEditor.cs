@@ -1,8 +1,6 @@
-using System;
-using System.Linq.Expressions;
-using UnityEngine.Experimental.PostProcessing;
+using UnityEngine.Rendering.PostProcessing;
 
-namespace UnityEditor.Experimental.PostProcessing
+namespace UnityEditor.Rendering.PostProcessing
 {
     [CustomEditor(typeof(PostProcessProfile))]
     sealed class PostProcessProfileEditor : Editor
@@ -17,7 +15,8 @@ namespace UnityEditor.Experimental.PostProcessing
 
         void OnDisable()
         {
-            m_EffectList.Clear();
+            if (m_EffectList != null)
+                m_EffectList.Clear();
         }
 
         public override void OnInspectorGUI()

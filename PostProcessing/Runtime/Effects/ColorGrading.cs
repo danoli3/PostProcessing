@@ -1,7 +1,6 @@
 using System;
-using UnityEngine.Rendering;
 
-namespace UnityEngine.Experimental.PostProcessing
+namespace UnityEngine.Rendering.PostProcessing
 {
     public enum GradingMode
     {
@@ -30,11 +29,12 @@ namespace UnityEngine.Experimental.PostProcessing
     [Serializable]
     public sealed class TonemapperParameter : ParameterOverride<Tonemapper> {}
 
+    // TODO: Could use some refactoring, too much duplicated code here
     [Serializable]
     [PostProcess(typeof(ColorGradingRenderer), "Unity/Color Grading")]
     public sealed class ColorGrading : PostProcessEffectSettings
     {
-        [DisplayName("Mode"), Tooltip("Select a color grading mode that fits your dynamic range and workflow. Use HDR if your camera is set to render in HDR and your target platform supports it. Use LDR for low-end mobiles or devices that don't support HDR. Use Custom HDR if you prefer authoring a Log LUT in external softwares.")]
+        [DisplayName("Mode"), Tooltip("Select a color grading mode that fits your dynamic range and workflow. Use HDR if your camera is set to render in HDR and your target platform supports it. Use LDR for low-end mobiles or devices that don't support HDR. Use External if you prefer authoring a Log LUT in external softwares.")]
         public GradingModeParameter gradingMode = new GradingModeParameter { value = GradingMode.HighDefinitionRange };
 
         [DisplayName("Lookup Texture"), Tooltip("")]
@@ -61,11 +61,11 @@ namespace UnityEngine.Experimental.PostProcessing
         [DisplayName("Gamma"), Min(0.001f), Tooltip("")]
         public FloatParameter toneCurveGamma = new FloatParameter { value = 1f };
 
-        [DisplayName("Lookup Texture"), Tooltip("Custom log-space lookup texture (strip format, e.g. 1024x32). EXR format is highly recommended or precision will be heavily degraded. Refer to the documentation for more information about how to create such a Lut.")]
-        public TextureParameter logLut = new TextureParameter { value = null };
-
         [DisplayName("Lookup Texture"), Tooltip("Custom lookup texture (strip format, e.g. 256x16) to apply before the rest of the color grading operators. If none is provided, a neutral one will be generated internally.")]
-        public TextureParameter ldrLut = new TextureParameter { value = null }; // LDR only
+        public TextureParameter ldrLut = new TextureParameter { value = null, defaultState = TextureParameterDefault.Lut2D }; // LDR only
+
+        [DisplayName("Contribution"), Range(0f, 1f), Tooltip("How much of the lookup texture will contribute to the color grading effect.")]
+        public FloatParameter ldrLutContribution = new FloatParameter { value = 1f };
 
         [DisplayName("Temperature"), Range(-100f, 100f), Tooltip("Sets the white balance to a custom color temperature.")]
         public FloatParameter temperature = new FloatParameter { value = 0f };
@@ -73,7 +73,11 @@ namespace UnityEngine.Experimental.PostProcessing
         [DisplayName("Tint"), Range(-100f, 100f), Tooltip("Sets the white balance to compensate for a green or magenta tint.")]
         public FloatParameter tint = new FloatParameter { value = 0f };
 
+#if UNITY_2018_1_OR_NEWER
+        [DisplayName("Color Filter"), ColorUsage(false, true), Tooltip("Tint the render by multiplying a color.")]
+#else
         [DisplayName("Color Filter"), ColorUsage(false, true, 0f, 8f, 0.125f, 3f), Tooltip("Tint the render by multiplying a color.")]
+#endif
         public ColorParameter colorFilter = new ColorParameter { value = Color.white };
 
         [DisplayName("Hue Shift"), Range(-180f, 180f), Tooltip("Shift the hue of all colors.")]
@@ -117,13 +121,13 @@ namespace UnityEngine.Experimental.PostProcessing
 
         [DisplayName("Blue"), Range(-200f, 200f), Tooltip("Modify influence of the blue channel in the overall mix.")]
         public FloatParameter mixerBlueOutBlueIn = new FloatParameter { value = 100f };
-        
+
         [DisplayName("Lift"), Tooltip("Controls the darkest portions of the render."), Trackball(TrackballAttribute.Mode.Lift)]
         public Vector4Parameter lift = new Vector4Parameter { value = new Vector4(1f, 1f, 1f, 0f) };
-        
+
         [DisplayName("Gamma"), Tooltip("Power function that controls midrange tones."), Trackball(TrackballAttribute.Mode.Gamma)]
         public Vector4Parameter gamma = new Vector4Parameter { value = new Vector4(1f, 1f, 1f, 0f) };
-        
+
         [DisplayName("Gain"), Tooltip("Controls the lightest portions of the render."), Trackball(TrackballAttribute.Mode.Gain)]
         public Vector4Parameter gain = new Vector4Parameter { value = new Vector4(1f, 1f, 1f, 0f) };
 
@@ -136,9 +140,9 @@ namespace UnityEngine.Experimental.PostProcessing
         public SplineParameter satVsSatCurve = new SplineParameter { value = new Spline(new AnimationCurve(), 0.5f, false, new Vector2(0f, 1f)) };
         public SplineParameter lumVsSatCurve = new SplineParameter { value = new Spline(new AnimationCurve(), 0.5f, false, new Vector2(0f, 1f)) };
 
-        public override bool IsEnabledAndSupported()
+        public override bool IsEnabledAndSupported(PostProcessRenderContext context)
         {
-            if (gradingMode.value == GradingMode.HighDefinitionRange || gradingMode.value == GradingMode.External)
+            if (gradingMode.value == GradingMode.External)
             {
                 if (!SystemInfo.supports3DRenderTextures || !SystemInfo.supportsComputeShaders)
                     return false;
@@ -154,6 +158,7 @@ namespace UnityEngine.Experimental.PostProcessing
         {
             LutGenLDRFromScratch,
             LutGenLDR,
+            LutGenHDR2D
         }
 
         Texture2D m_GradingCurves;
@@ -168,20 +173,26 @@ namespace UnityEngine.Experimental.PostProcessing
 
         public override void Render(PostProcessRenderContext context)
         {
-            switch (settings.gradingMode.value)
-            {
-                case GradingMode.External: RenderExternalPipeline(context);
-                    break;
-                case GradingMode.LowDefinitionRange: RenderLDRPipeline(context);
-                    break;
-                case GradingMode.HighDefinitionRange: RenderHDRPipeline(context);
-                    break;
-            }
+            var gradingMode = settings.gradingMode.value;
+            var supportComputeTex3D = SystemInfo.supports3DRenderTextures
+                && SystemInfo.supportsComputeShaders
+                && context.resources.computeShaders.lut3DBaker != null
+                && SystemInfo.graphicsDeviceType != GraphicsDeviceType.OpenGLCore
+                && SystemInfo.graphicsDeviceType != GraphicsDeviceType.OpenGLES3;
+
+            if (gradingMode == GradingMode.External)
+                RenderExternalPipeline3D(context);
+            else if (gradingMode == GradingMode.HighDefinitionRange && supportComputeTex3D)
+                RenderHDRPipeline3D(context);
+            else if (gradingMode == GradingMode.HighDefinitionRange)
+                RenderHDRPipeline2D(context);
+            else
+                RenderLDRPipeline2D(context);
         }
 
         // Do color grading using an externally authored 3D lut; it requires Texture3D support and
         // compute shaders in case blending is required - Desktop / Consoles / Some high-end mobiles
-        void RenderExternalPipeline(PostProcessRenderContext context)
+        void RenderExternalPipeline3D(PostProcessRenderContext context)
         {
             var lut = settings.externalLut.value;
 
@@ -189,16 +200,17 @@ namespace UnityEngine.Experimental.PostProcessing
                 return;
 
             var uberSheet = context.uberSheet;
-            uberSheet.EnableKeyword("COLOR_GRADING_HDR");
-            uberSheet.properties.SetTexture(Uniforms._Lut3D, lut);
-            uberSheet.properties.SetVector(Uniforms._Lut3D_Params, new Vector2(1f / lut.width, lut.width - 1f));
-            uberSheet.properties.SetFloat(Uniforms._PostExposure, RuntimeUtilities.Exp2(settings.postExposure.value));
+            uberSheet.EnableKeyword("COLOR_GRADING_HDR_3D");
+            uberSheet.properties.SetTexture(ShaderIDs.Lut3D, lut);
+            uberSheet.properties.SetVector(ShaderIDs.Lut3D_Params, new Vector2(1f / lut.width, lut.width - 1f));
+            uberSheet.properties.SetFloat(ShaderIDs.PostExposure, RuntimeUtilities.Exp2(settings.postExposure.value));
             context.logLut = lut;
         }
 
         // HDR color pipeline is rendered to a 3D lut; it requires Texture3D & compute shaders
         // support - Desktop / Consoles / Some high-end mobiles
-        void RenderHDRPipeline(PostProcessRenderContext context)
+        // TODO: Use ShaderIDs for compute once the compatible APIs go in
+        void RenderHDRPipeline3D(PostProcessRenderContext context)
         {
             // Unfortunately because AnimationCurve doesn't implement GetHashCode and we don't have
             // any reliable way to figure out if a curve data is different from another one we can't
@@ -225,7 +237,8 @@ namespace UnityEngine.Experimental.PostProcessing
                         break;
                 }
 
-                int groupSize = Mathf.CeilToInt(k_Lut3DSize / 8f);
+                int groupSizeXY = Mathf.CeilToInt(k_Lut3DSize / 8f);
+                int groupSizeZ = Mathf.CeilToInt(k_Lut3DSize / (RuntimeUtilities.isAndroidOpenGL || RuntimeUtilities.isOSXMetal ? 2f : 8f));
                 var cmd = context.command;
                 cmd.SetComputeTextureParam(compute, kernel, "_Output", m_InternalLogLut);
                 cmd.SetComputeVectorParam(compute, "_Size", new Vector4(k_Lut3DSize, 1f / (k_Lut3DSize - 1f), 0f, 0f));
@@ -266,96 +279,176 @@ namespace UnityEngine.Experimental.PostProcessing
                         settings.toneCurveGamma.value
                     );
 
-                    var curve = new Vector4(m_HableCurve.inverseWhitePoint, m_HableCurve.x0, m_HableCurve.x1, 0f);
-                    cmd.SetComputeVectorParam(compute, "_CustomToneCurve", curve);
-                    
-                    var toe = m_HableCurve.segments[0];
-                    var mid = m_HableCurve.segments[1];
-                    var sho = m_HableCurve.segments[2];
-                    var toeSegmentA = new Vector4(toe.offsetX, toe.offsetY, toe.scaleX, toe.scaleY);
-                    var toeSegmentB = new Vector4(toe.lnA, toe.B, 0f, 0f);
-                    var midSegmentA = new Vector4(mid.offsetX, mid.offsetY, mid.scaleX, mid.scaleY);
-                    var midSegmentB = new Vector4(mid.lnA, mid.B, 0f, 0f);
-                    var shoSegmentA = new Vector4(sho.offsetX, sho.offsetY, sho.scaleX, sho.scaleY);
-                    var shoSegmentB = new Vector4(sho.lnA, sho.B, 0f, 0f);
-                    cmd.SetComputeVectorParam(compute, "_ToeSegmentA", toeSegmentA);
-                    cmd.SetComputeVectorParam(compute, "_ToeSegmentB", toeSegmentB);
-                    cmd.SetComputeVectorParam(compute, "_MidSegmentA", midSegmentA);
-                    cmd.SetComputeVectorParam(compute, "_MidSegmentB", midSegmentB);
-                    cmd.SetComputeVectorParam(compute, "_ShoSegmentA", shoSegmentA);
-                    cmd.SetComputeVectorParam(compute, "_ShoSegmentB", shoSegmentB);
+                    cmd.SetComputeVectorParam(compute, "_CustomToneCurve", m_HableCurve.uniforms.curve);
+                    cmd.SetComputeVectorParam(compute, "_ToeSegmentA", m_HableCurve.uniforms.toeSegmentA);
+                    cmd.SetComputeVectorParam(compute, "_ToeSegmentB", m_HableCurve.uniforms.toeSegmentB);
+                    cmd.SetComputeVectorParam(compute, "_MidSegmentA", m_HableCurve.uniforms.midSegmentA);
+                    cmd.SetComputeVectorParam(compute, "_MidSegmentB", m_HableCurve.uniforms.midSegmentB);
+                    cmd.SetComputeVectorParam(compute, "_ShoSegmentA", m_HableCurve.uniforms.shoSegmentA);
+                    cmd.SetComputeVectorParam(compute, "_ShoSegmentB", m_HableCurve.uniforms.shoSegmentB);
                 }
 
                 // Generate the lut
-                context.command.BeginSample("HdrColorGradingLut");
-                cmd.DispatchCompute(compute, kernel, groupSize, groupSize, groupSize);
-                context.command.EndSample("HdrColorGradingLut");
+                uint tx, ty, tz = 0;
+                compute.GetKernelThreadGroupSizes(kernel, out tx, out ty, out tz);
+                //Debug.LogFormat("Size: {0} {1} {2}", tx, ty, tz);
+                context.command.BeginSample("HdrColorGradingLut3D");
+                cmd.DispatchCompute(compute, kernel, groupSizeXY, groupSizeXY, groupSizeZ);
+                context.command.EndSample("HdrColorGradingLut3D");
             }
 
             var lut = m_InternalLogLut;
             var uberSheet = context.uberSheet;
-            uberSheet.EnableKeyword("COLOR_GRADING_HDR");
-            uberSheet.properties.SetTexture(Uniforms._Lut3D, lut);
-            uberSheet.properties.SetVector(Uniforms._Lut3D_Params, new Vector2(1f / lut.width, lut.width - 1f));
-            uberSheet.properties.SetFloat(Uniforms._PostExposure, RuntimeUtilities.Exp2(settings.postExposure.value));
+            uberSheet.EnableKeyword("COLOR_GRADING_HDR_3D");
+            uberSheet.properties.SetTexture(ShaderIDs.Lut3D, lut);
+            uberSheet.properties.SetVector(ShaderIDs.Lut3D_Params, new Vector2(1f / lut.width, lut.width - 1f));
+            uberSheet.properties.SetFloat(ShaderIDs.PostExposure, RuntimeUtilities.Exp2(settings.postExposure.value));
 
             context.logLut = lut;
         }
 
-        // LDR color pipeline is rendered to a 2D strip lut (works on every platform)
-        void RenderLDRPipeline(PostProcessRenderContext context)
+        // HDR color pipeline is rendered to a 2D strip lut (works on HDR platforms without compute
+        // and 3D texture support). Precision is sliiiiiiightly lower than when using a 3D texture
+        // LUT (33^3 -> 32^3) but most of the time it's imperceptible.
+        void RenderHDRPipeline2D(PostProcessRenderContext context)
         {
-            // For the same reasons as in RenderHDRPipeline, regen LUT on evey frame
+            // For the same reasons as in RenderHDRPipeline3D, regen LUT on every frame
             {
-                CheckInternalLdrLut();
+                CheckInternalStripLut();
 
                 // Lut setup
                 var lutSheet = context.propertySheets.Get(context.resources.shaders.lut2DBaker);
                 lutSheet.ClearKeywords();
 
-                lutSheet.properties.SetVector(Uniforms._Lut2D_Params, new Vector4(k_Lut2DSize, 0.5f / (k_Lut2DSize * k_Lut2DSize), 0.5f / k_Lut2DSize, k_Lut2DSize / (k_Lut2DSize - 1f)));
+                lutSheet.properties.SetVector(ShaderIDs.Lut2D_Params, new Vector4(k_Lut2DSize, 0.5f / (k_Lut2DSize * k_Lut2DSize), 0.5f / k_Lut2DSize, k_Lut2DSize / (k_Lut2DSize - 1f)));
 
                 var colorBalance = ColorUtilities.ComputeColorBalance(settings.temperature.value, settings.tint.value);
-                lutSheet.properties.SetVector(Uniforms._ColorBalance, colorBalance);
-                lutSheet.properties.SetVector(Uniforms._ColorFilter, settings.colorFilter.value);
+                lutSheet.properties.SetVector(ShaderIDs.ColorBalance, colorBalance);
+                lutSheet.properties.SetVector(ShaderIDs.ColorFilter, settings.colorFilter.value);
 
                 float hue = settings.hueShift.value / 360f;         // Remap to [-0.5;0.5]
                 float sat = settings.saturation.value / 100f + 1f;  // Remap to [0;2]
                 float con = settings.contrast.value / 100f + 1f;    // Remap to [0;2]
-                lutSheet.properties.SetVector(Uniforms._HueSatCon, new Vector3(hue, sat, con));
+                lutSheet.properties.SetVector(ShaderIDs.HueSatCon, new Vector3(hue, sat, con));
 
                 var channelMixerR = new Vector3(settings.mixerRedOutRedIn, settings.mixerRedOutGreenIn, settings.mixerRedOutBlueIn);
                 var channelMixerG = new Vector3(settings.mixerGreenOutRedIn, settings.mixerGreenOutGreenIn, settings.mixerGreenOutBlueIn);
                 var channelMixerB = new Vector3(settings.mixerBlueOutRedIn, settings.mixerBlueOutGreenIn, settings.mixerBlueOutBlueIn);
-                lutSheet.properties.SetVector(Uniforms._ChannelMixerRed, channelMixerR / 100f);            // Remap to [-2;2]
-                lutSheet.properties.SetVector(Uniforms._ChannelMixerGreen, channelMixerG / 100f);
-                lutSheet.properties.SetVector(Uniforms._ChannelMixerBlue, channelMixerB / 100f);
+                lutSheet.properties.SetVector(ShaderIDs.ChannelMixerRed, channelMixerR / 100f);            // Remap to [-2;2]
+                lutSheet.properties.SetVector(ShaderIDs.ChannelMixerGreen, channelMixerG / 100f);
+                lutSheet.properties.SetVector(ShaderIDs.ChannelMixerBlue, channelMixerB / 100f);
 
-                var lift = ColorUtilities.ColorToLift(settings.lift.value);
-                var gain = ColorUtilities.ColorToGain(settings.gain.value);
-                var invgamma = ColorUtilities.ColorToInverseGamma(settings.gamma.value);
-                lutSheet.properties.SetVector(Uniforms._Lift, lift);
-                lutSheet.properties.SetVector(Uniforms._InvGamma, invgamma);
-                lutSheet.properties.SetVector(Uniforms._Gain, gain);
+                var lift = ColorUtilities.ColorToLift(settings.lift.value * 0.2f);
+                var gain = ColorUtilities.ColorToGain(settings.gain.value * 0.8f);
+                var invgamma = ColorUtilities.ColorToInverseGamma(settings.gamma.value * 0.8f);
+                lutSheet.properties.SetVector(ShaderIDs.Lift, lift);
+                lutSheet.properties.SetVector(ShaderIDs.InvGamma, invgamma);
+                lutSheet.properties.SetVector(ShaderIDs.Gain, gain);
 
-                lutSheet.properties.SetFloat(Uniforms._Brightness, (settings.brightness.value + 100f) / 100f);
-                lutSheet.properties.SetTexture(Uniforms._Curves, GetCurveTexture(false));
+                lutSheet.properties.SetTexture(ShaderIDs.Curves, GetCurveTexture(true));
+
+                var tonemapper = settings.tonemapper.value;
+                if (tonemapper == Tonemapper.Custom)
+                {
+                    lutSheet.EnableKeyword("TONEMAPPING_CUSTOM");
+
+                    m_HableCurve.Init(
+                        settings.toneCurveToeStrength.value,
+                        settings.toneCurveToeLength.value,
+                        settings.toneCurveShoulderStrength.value,
+                        settings.toneCurveShoulderLength.value,
+                        settings.toneCurveShoulderAngle.value,
+                        settings.toneCurveGamma.value
+                    );
+
+                    lutSheet.properties.SetVector(ShaderIDs.CustomToneCurve, m_HableCurve.uniforms.curve);
+                    lutSheet.properties.SetVector(ShaderIDs.ToeSegmentA, m_HableCurve.uniforms.toeSegmentA);
+                    lutSheet.properties.SetVector(ShaderIDs.ToeSegmentB, m_HableCurve.uniforms.toeSegmentB);
+                    lutSheet.properties.SetVector(ShaderIDs.MidSegmentA, m_HableCurve.uniforms.midSegmentA);
+                    lutSheet.properties.SetVector(ShaderIDs.MidSegmentB, m_HableCurve.uniforms.midSegmentB);
+                    lutSheet.properties.SetVector(ShaderIDs.ShoSegmentA, m_HableCurve.uniforms.shoSegmentA);
+                    lutSheet.properties.SetVector(ShaderIDs.ShoSegmentB, m_HableCurve.uniforms.shoSegmentB);
+                }
+                else if (tonemapper == Tonemapper.ACES)
+                    lutSheet.EnableKeyword("TONEMAPPING_ACES");
+                else if (tonemapper == Tonemapper.Neutral)
+                    lutSheet.EnableKeyword("TONEMAPPING_NEUTRAL");
 
                 // Generate the lut
-                context.command.BeginSample("LdrColorGradingLut");
-                var userLut = settings.ldrLut.value;
-                if (userLut == null)
-                    context.command.BlitFullscreenTriangle(BuiltinRenderTextureType.None, m_InternalLdrLut, lutSheet, (int)Pass.LutGenLDRFromScratch);
-                else
-                    context.command.BlitFullscreenTriangle(userLut, m_InternalLdrLut, lutSheet, (int)Pass.LutGenLDR);
-                context.command.EndSample("LdrColorGradingLut");
+                context.command.BeginSample("HdrColorGradingLut2D");
+                context.command.BlitFullscreenTriangle(BuiltinRenderTextureType.None, m_InternalLdrLut, lutSheet, (int)Pass.LutGenHDR2D);
+                context.command.EndSample("HdrColorGradingLut2D");
             }
 
             var lut = m_InternalLdrLut;
             var uberSheet = context.uberSheet;
-            uberSheet.EnableKeyword("COLOR_GRADING_LDR");
-            uberSheet.properties.SetVector(Uniforms._Lut2D_Params, new Vector3(1f / lut.width, 1f / lut.height, lut.height - 1f));
-            uberSheet.properties.SetTexture(Uniforms._Lut2D, lut);
+            uberSheet.EnableKeyword("COLOR_GRADING_HDR_2D");
+            uberSheet.properties.SetVector(ShaderIDs.Lut2D_Params, new Vector3(1f / lut.width, 1f / lut.height, lut.height - 1f));
+            uberSheet.properties.SetTexture(ShaderIDs.Lut2D, lut);
+            uberSheet.properties.SetFloat(ShaderIDs.PostExposure, RuntimeUtilities.Exp2(settings.postExposure.value));
+        }
+
+        // LDR color pipeline is rendered to a 2D strip lut (works on every platform)
+        void RenderLDRPipeline2D(PostProcessRenderContext context)
+        {
+            // For the same reasons as in RenderHDRPipeline3D, regen LUT on every frame
+            {
+                CheckInternalStripLut();
+
+                // Lut setup
+                var lutSheet = context.propertySheets.Get(context.resources.shaders.lut2DBaker);
+                lutSheet.ClearKeywords();
+
+                lutSheet.properties.SetVector(ShaderIDs.Lut2D_Params, new Vector4(k_Lut2DSize, 0.5f / (k_Lut2DSize * k_Lut2DSize), 0.5f / k_Lut2DSize, k_Lut2DSize / (k_Lut2DSize - 1f)));
+
+                var colorBalance = ColorUtilities.ComputeColorBalance(settings.temperature.value, settings.tint.value);
+                lutSheet.properties.SetVector(ShaderIDs.ColorBalance, colorBalance);
+                lutSheet.properties.SetVector(ShaderIDs.ColorFilter, settings.colorFilter.value);
+
+                float hue = settings.hueShift.value / 360f;         // Remap to [-0.5;0.5]
+                float sat = settings.saturation.value / 100f + 1f;  // Remap to [0;2]
+                float con = settings.contrast.value / 100f + 1f;    // Remap to [0;2]
+                lutSheet.properties.SetVector(ShaderIDs.HueSatCon, new Vector3(hue, sat, con));
+
+                var channelMixerR = new Vector3(settings.mixerRedOutRedIn, settings.mixerRedOutGreenIn, settings.mixerRedOutBlueIn);
+                var channelMixerG = new Vector3(settings.mixerGreenOutRedIn, settings.mixerGreenOutGreenIn, settings.mixerGreenOutBlueIn);
+                var channelMixerB = new Vector3(settings.mixerBlueOutRedIn, settings.mixerBlueOutGreenIn, settings.mixerBlueOutBlueIn);
+                lutSheet.properties.SetVector(ShaderIDs.ChannelMixerRed, channelMixerR / 100f);            // Remap to [-2;2]
+                lutSheet.properties.SetVector(ShaderIDs.ChannelMixerGreen, channelMixerG / 100f);
+                lutSheet.properties.SetVector(ShaderIDs.ChannelMixerBlue, channelMixerB / 100f);
+
+                var lift = ColorUtilities.ColorToLift(settings.lift.value);
+                var gain = ColorUtilities.ColorToGain(settings.gain.value);
+                var invgamma = ColorUtilities.ColorToInverseGamma(settings.gamma.value);
+                lutSheet.properties.SetVector(ShaderIDs.Lift, lift);
+                lutSheet.properties.SetVector(ShaderIDs.InvGamma, invgamma);
+                lutSheet.properties.SetVector(ShaderIDs.Gain, gain);
+
+                lutSheet.properties.SetFloat(ShaderIDs.Brightness, (settings.brightness.value + 100f) / 100f);
+                lutSheet.properties.SetTexture(ShaderIDs.Curves, GetCurveTexture(false));
+
+                // Generate the lut
+                context.command.BeginSample("LdrColorGradingLut2D");
+
+                var userLut = settings.ldrLut.value;
+                if (userLut == null)
+                {
+                    context.command.BlitFullscreenTriangle(BuiltinRenderTextureType.None, m_InternalLdrLut, lutSheet, (int)Pass.LutGenLDRFromScratch);
+                }
+                else
+                {
+                    lutSheet.properties.SetVector(ShaderIDs.UserLut2D_Params, new Vector4(1f / userLut.width, 1f / userLut.height, userLut.height - 1f, settings.ldrLutContribution));
+                    context.command.BlitFullscreenTriangle(userLut, m_InternalLdrLut, lutSheet, (int)Pass.LutGenLDR);
+                }
+
+                context.command.EndSample("LdrColorGradingLut2D");
+            }
+
+            var lut = m_InternalLdrLut;
+            var uberSheet = context.uberSheet;
+            uberSheet.EnableKeyword("COLOR_GRADING_LDR_2D");
+            uberSheet.properties.SetVector(ShaderIDs.Lut2D_Params, new Vector3(1f / lut.width, 1f / lut.height, lut.height - 1f));
+            uberSheet.properties.SetTexture(ShaderIDs.Lut2D, lut);
         }
 
         void CheckInternalLogLut()
@@ -369,13 +462,13 @@ namespace UnityEngine.Experimental.PostProcessing
                 m_InternalLogLut = new RenderTexture(k_Lut3DSize, k_Lut3DSize, 0, format, RenderTextureReadWrite.Linear)
                 {
                     name = "Color Grading Log Lut",
+                    dimension = TextureDimension.Tex3D,
                     hideFlags = HideFlags.DontSave,
                     filterMode = FilterMode.Bilinear,
                     wrapMode = TextureWrapMode.Clamp,
                     anisoLevel = 0,
                     enableRandomWrite = true,
                     volumeDepth = k_Lut3DSize,
-                    dimension = TextureDimension.Tex3D,
                     autoGenerateMips = false,
                     useMipMap = false
                 };
@@ -383,7 +476,7 @@ namespace UnityEngine.Experimental.PostProcessing
             }
         }
 
-        void CheckInternalLdrLut()
+        void CheckInternalStripLut()
         {
             // Check internal lut state, (re)create it if needed
             if (m_InternalLdrLut == null || !m_InternalLdrLut.IsCreated())
@@ -393,7 +486,7 @@ namespace UnityEngine.Experimental.PostProcessing
                 var format = GetLutFormat();
                 m_InternalLdrLut = new RenderTexture(k_Lut2DSize * k_Lut2DSize, k_Lut2DSize, 0, format, RenderTextureReadWrite.Linear)
                 {
-                    name = "Color Grading Ldr Lut",
+                    name = "Color Grading Strip Lut",
                     hideFlags = HideFlags.DontSave,
                     filterMode = FilterMode.Bilinear,
                     wrapMode = TextureWrapMode.Clamp,
@@ -428,7 +521,7 @@ namespace UnityEngine.Experimental.PostProcessing
             var redCurve = settings.redCurve.value;
             var greenCurve = settings.greenCurve.value;
             var blueCurve = settings.blueCurve.value;
-            
+
             var pixels = m_Pixels;
 
             for (int i = 0; i < Spline.k_Precision; i++)
@@ -462,14 +555,14 @@ namespace UnityEngine.Experimental.PostProcessing
             // Use ARGBHalf if possible, fallback on ARGB2101010 and ARGB32 otherwise
             var format = RenderTextureFormat.ARGBHalf;
 
-            if (!SystemInfo.SupportsRenderTextureFormat(format))
+            if (!format.IsSupported())
             {
                 format = RenderTextureFormat.ARGB2101010;
 
                 // Note that using a log lut in ARGB32 is a *very* bad idea but we need it for
                 // compatibility reasons (else if a platform doesn't support one of the previous
                 // format it'll output a black screen, or worse will segfault on the user).
-                if (!SystemInfo.SupportsRenderTextureFormat(format))
+                if (!format.IsSupported())
                     format = RenderTextureFormat.ARGB32;
             }
 

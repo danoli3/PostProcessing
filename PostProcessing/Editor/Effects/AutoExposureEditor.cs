@@ -1,6 +1,7 @@
-using UnityEngine.Experimental.PostProcessing;
+using UnityEngine;
+using UnityEngine.Rendering.PostProcessing;
 
-namespace UnityEditor.Experimental.PostProcessing
+namespace UnityEditor.Rendering.PostProcessing
 {
     [PostProcessEditor(typeof(AutoExposure))]
     public sealed class AutoExposureEditor : PostProcessEffectEditor<AutoExposure>
@@ -30,12 +31,21 @@ namespace UnityEditor.Experimental.PostProcessing
 
         public override void OnInspectorGUI()
         {
+            if (!SystemInfo.supportsComputeShaders)
+                EditorGUILayout.HelpBox("Auto exposure requires compute shader support.", MessageType.Warning);
+
             EditorUtilities.DrawHeaderLabel("Exposure");
 
             PropertyField(m_Filtering);
-
             PropertyField(m_MinLuminance);
             PropertyField(m_MaxLuminance);
+
+            // Clamp min/max adaptation values
+            float minLum = m_MinLuminance.value.floatValue;
+            float maxLum = m_MaxLuminance.value.floatValue;
+            m_MinLuminance.value.floatValue = Mathf.Min(minLum, maxLum);
+            m_MaxLuminance.value.floatValue = Mathf.Max(minLum, maxLum);
+
             PropertyField(m_KeyValue);
             
             EditorGUILayout.Space();

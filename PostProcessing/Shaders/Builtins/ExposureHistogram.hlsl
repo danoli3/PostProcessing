@@ -6,8 +6,13 @@
 // Don't forget to update 'AutoExposureRenderer.cs' if you change these values !
 #define HISTOGRAM_BINS          128
 #define HISTOGRAM_TEXELS        HISTOGRAM_BINS / 4
-#define HISTOGRAM_THREAD_X      16
-#define HISTOGRAM_THREAD_Y      16
+#if SHADER_API_GLES3
+    #define HISTOGRAM_THREAD_X      16
+    #define HISTOGRAM_THREAD_Y      8
+#else
+    #define HISTOGRAM_THREAD_X      16
+    #define HISTOGRAM_THREAD_Y      16
+#endif
 
 float GetHistogramBinFromLuminance(float value, float2 scaleOffset)
 {
@@ -24,7 +29,6 @@ float GetBinValue(StructuredBuffer<uint> buffer, uint index, float maxHistogramV
     return float(buffer[index]) * maxHistogramValue;
 }
 
-// Done once in the vertex shader
 float FindMaxHistogramValue(StructuredBuffer<uint> buffer)
 {
     uint maxValue = 0u;
@@ -63,9 +67,9 @@ float GetAverageLuminance(StructuredBuffer<uint> buffer, float4 params, float ma
     uint i;
     float totalSum = 0.0;
 
-    UNITY_LOOP
-        for (i = 0; i < HISTOGRAM_BINS; i++)
-            totalSum += GetBinValue(buffer, i, maxHistogramValue);
+    UNITY_UNROLL
+    for (i = 0; i < HISTOGRAM_BINS; i++)
+        totalSum += GetBinValue(buffer, i, maxHistogramValue);
 
     // Skip darker and lighter parts of the histogram to stabilize the auto exposure
     // x: filtered sum
@@ -73,9 +77,9 @@ float GetAverageLuminance(StructuredBuffer<uint> buffer, float4 params, float ma
     // zw: fractions
     float4 filter = float4(0.0, 0.0, totalSum * params.xy);
 
-    UNITY_LOOP
-        for (i = 0; i < HISTOGRAM_BINS; i++)
-            FilterLuminance(buffer, i, maxHistogramValue, scaleOffset, filter);
+    UNITY_UNROLL
+    for (i = 0; i < HISTOGRAM_BINS; i++)
+        FilterLuminance(buffer, i, maxHistogramValue, scaleOffset, filter);
 
     // Clamp to user brightness range
     return clamp(filter.x / max(filter.y, EPSILON), params.z, params.w);
